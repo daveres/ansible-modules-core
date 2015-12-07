@@ -67,21 +67,31 @@ If ($force -or -not (Test-Path $dest)) {
 }
 Else {
     Try {
-        $webRequest = [System.Net.HttpWebRequest]::Create($url)
-
+        #before download, head to compare -> more efficient
+        $webRequestHead = [System.Net.HttpWebRequest]::Create($url)
         if($username -and $password){
-            $webRequest.Credentials = New-Object System.Net.NetworkCredential($username, $password)
+                $webRequestHead.Credentials = New-Object System.Net.NetworkCredential($username, $password)
         }
+        $webRequestHead.Method = "HEAD"
+        [System.Net.HttpWebResponse]$webResponseHead = $webRequestHead.GetResponse()
+        $modified = $webResponseHead.LastModified
+        $webRequestHead = $null
 
-        $webRequest.IfModifiedSince = ([System.IO.FileInfo]$dest).LastWriteTime
-        $webRequest.Method = "GET"
-        [System.Net.HttpWebResponse]$webResponse = $webRequest.GetResponse()
-        
-        $stream = New-Object System.IO.StreamReader($response.GetResponseStream())
-        
-        $stream.ReadToEnd() | Set-Content -Path $dest -Force -ErrorAction Stop
-        
-        $result.changed = $true
+        #comparision
+        if ($webResponseHead.LastModified -ne ([System.IO.FileInfo]$dest).LastWriteTime) {
+
+                $webRequest = [System.Net.HttpWebRequest]::Create($url)
+                if($username -and $password){
+                        $webRequest.Credentials = New-Object System.Net.NetworkCredential($username, $password)
+                }
+                $webRequest.Method = "GET"
+                [System.Net.HttpWebResponse]$webResponse = $webRequest.GetResponse()
+                $stream = New-Object System.IO.StreamReader($webResponse.GetResponseStream()) #change $response -> $webResponse
+                $stream.ReadToEnd() | Set-Content -Path $dest -Force -ErrorAction Stop
+                #set lastwritetime in the downloaded file
+                (Get-ChildItem $dest).LastWriteTime = $modified
+                $result.changed = $true
+        }
     }
     Catch [System.Net.WebException] {
         If ($_.Exception.Response.StatusCode -ne [System.Net.HttpStatusCode]::NotModified) {
@@ -91,6 +101,8 @@ Else {
     Catch {
         Fail-Json $result "Error downloading $url to $dest $($_.Exception.Message)"
     }
+    $webRequest = $null
+    $steam = $null
 }
 
 Set-Attr $result.win_get_url "url" $url

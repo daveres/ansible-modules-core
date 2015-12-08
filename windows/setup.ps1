@@ -28,6 +28,26 @@ $result = New-Object psobject @{
 $win32_os = Get-CimInstance Win32_OperatingSystem
 $win32_cs = Get-CimInstance Win32_ComputerSystem
 $osversion = [Environment]::OSVersion
+
+### ADD VIRTUAL PRODUCT INFO ###
+if (((Get-WmiObject win32_bios).Version).tolower().contains("version")) {
+        $product_name = "Hyper-V"
+}
+if (((Get-WmiObject win32_bios).SerialNumber).tolower().contains("vmware")) {
+        $product_name = "VMWare"
+}
+if (((Get-WmiObject win32_bios).Version).tolower().contains("xen")) {
+        $product_name = "Xen"
+}
+###
+
+### ADD CPU INFO ###
+$win32_processor = Get-CimInstance Win32_Processor
+$processor_cores=0;$win32_processor | %{$processor_cores += $_.NumberOfCores}
+$processor_count=0;$win32_processor | %{$processor_count += $_.NumberOfLogicalProcessors}
+$processor_info=$win32_processor | Select-Object -Property Manufacturer,Name
+###
+
 $capacity = $win32_cs.TotalPhysicalMemory # Win32_PhysicalMemory is empty on some virtual platforms
 $netcfg = Get-WmiObject win32_NetworkAdapterConfiguration
 
@@ -71,6 +91,15 @@ Set-Attr $date "hour" (Get-Date -format HH)
 Set-Attr $date "minute" (Get-Date -format mm)
 Set-Attr $date "iso8601" (Get-Date -format s)
 Set-Attr $result.ansible_facts "ansible_date_time" $date
+
+### ADD TO ANSIBLE_FACTS INFO ABOUT CPU AND VIRTUALIZATION INFO ###
+if ($product_name){
+        Set-Attr $result.ansible_facts "ansible_product_name" $product_name
+}
+Set-Attr $result.ansible_facts "ansible_processor_cores" $processor_cores
+Set-Attr $result.ansible_facts "ansible_processor_count" $processor_count
+Set-Attr $result.ansible_facts "ansible_processor" $processor_info
+###
 
 Set-Attr $result.ansible_facts "ansible_totalmem" $capacity
 

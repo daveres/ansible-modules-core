@@ -31,13 +31,16 @@ $osversion = [Environment]::OSVersion
 
 ### ADD VIRTUAL PRODUCT INFO ###
 if (((Get-WmiObject win32_bios).Version).tolower().contains("version")) {
-        $product_name = "Hyper-V"
+        $virtualization_type = "Hyper-V"
 }
 if (((Get-WmiObject win32_bios).SerialNumber).tolower().contains("vmware")) {
-        $product_name = "VMWare"
+        $virtualization_type = "VMWare"
 }
 if (((Get-WmiObject win32_bios).Version).tolower().contains("xen")) {
-        $product_name = "Xen"
+        $virtualization_type = "Xen"
+}
+if (((Get-WmiObject win32_bios).Version).tolower().contains("vbox")) {
+        $virtualization_type = "VirtualBox"
 }
 ###
 
@@ -94,7 +97,7 @@ Set-Attr $result.ansible_facts "ansible_date_time" $date
 
 ### ADD TO ANSIBLE_FACTS INFO ABOUT CPU AND VIRTUALIZATION INFO ###
 if ($product_name){
-        Set-Attr $result.ansible_facts "ansible_product_name" $product_name
+        Set-Attr $result.ansible_facts "ansible_virtualization_type" $virtualization_type
 }
 Set-Attr $result.ansible_facts "ansible_processor_cores" $processor_cores
 Set-Attr $result.ansible_facts "ansible_processor_count" $processor_count

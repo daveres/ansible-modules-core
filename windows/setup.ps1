@@ -28,6 +28,75 @@ $result = New-Object psobject @{
 $win32_os = Get-CimInstance Win32_OperatingSystem
 $win32_cs = Get-CimInstance Win32_ComputerSystem
 $osversion = [Environment]::OSVersion
+
+### ADD VIRTUAL PRODUCT INFO ###
+if (((Get-WmiObject win32_bios).Version).tolower().contains("version")) {
+        $virtualization_type = "Hyper-V"
+}
+if (((Get-WmiObject win32_bios).SerialNumber).tolower().contains("vmware")) {
+        $virtualization_type = "VMWare"
+}
+if (((Get-WmiObject win32_bios).Version).tolower().contains("xen")) {
+        $virtualization_type = "Xen"
+}
+if (((Get-WmiObject win32_bios).Version).tolower().contains("vbox")) {
+        $virtualization_type = "VirtualBox"
+}
+###
+
+### ADD CPU INFO ###
+$win32_processor = Get-WmiObject -Class Win32_Processor
+$processor_count=(,($win32_processor)).count #physical processors
+$processor_cores=0;$win32_processor | %{$processor_cores += $_.NumberOfCores} #physical cores
+$processor_info=$win32_processor | Select-Object -Property Manufacturer,Name
+###
+
+### ADD PHISICAL DISK INFO ###
+$arraydevices = @()
+$diskdrives = Get-WmiObject -Class Win32_DiskDrive 
+foreach ($diskdrive in $diskdrives) {
+	$thisdisk = New-Object psobject @{
+        deviceid = $diskdrive.deviceid
+        size = $diskdrive.size
+        caption = $diskdrive.caption
+        index = $diskdrive.index
+        partitions = $null
+    }
+    $arraypartition = @()
+    $diskpartitions = Get-WmiObject -Class Win32_DiskPartition -filter "DiskIndex=$($diskdrive.index)"
+    foreach ($diskpartition in $diskpartitions) {
+		$thispartition = $null
+        $thispartition = New-Object psobject @{
+            numberofblocks = $diskpartition.numberofblocks
+            bootpartition = $diskpartition.bootpartition
+            name = $diskpartition.name
+            primarypartition = $diskpartition.primarypartition
+            size = $diskpartition.size
+            index = $diskpartition.index
+        }
+        $arraypartition += $thispartition
+    }
+    $thisdisk.partitions = $arraypartition
+	$arraydevices += $thisdisk
+}
+###
+
+### ADD LOGICAL DISK INFO ###
+$logicaldisks = Get-WmiObject -Class Win32_LogicalDisk -Filter "DriveType=3"
+$arraymounts = @()
+foreach ($logicaldisk in $logicaldisks) {
+	$thisklogicaldisk = New-Object psobject @{
+        deviceid = $logicaldisk.deviceid
+        drivetype = $logicaldisk.drivetype
+        providername = $logicaldisk.providername
+        freespace = $logicaldisk.freespace
+        size = $logicaldisk.size
+        volumename = $logicaldisk.volumename
+    }
+	$arraymounts += $thisklogicaldisk
+}
+###
+
 $capacity = $win32_cs.TotalPhysicalMemory # Win32_PhysicalMemory is empty on some virtual platforms
 $netcfg = Get-WmiObject win32_NetworkAdapterConfiguration
 
@@ -40,15 +109,36 @@ foreach ($adapter in $ActiveNetcfg)
     dns_domain = $adapter.dnsdomain
     default_gateway = $null
     interface_index = $adapter.InterfaceIndex
+	nameservers = $null
+	search = $null
     }
     
     if ($adapter.defaultIPGateway)
     {
         $thisadapter.default_gateway = $adapter.DefaultIPGateway[0].ToString()
     }
+	
+	### ADD DNS SERVERS INFO ###
+	$thisadapter.nameservers = $adapter.DNSServerSearchOrder 
+	$thisadapter.search = $adapter.DNSDomainSuffixSearchOrder 
+	###
     
     $formattednetcfg += $thisadapter;$thisadapter = $null
 }
+
+### GET ENVIROMENT VARIABLES ###
+$listenv = Get-ChildItem env: | Select-Object -Property Name,Value
+$dictenv = @{}
+foreach ($itemenv in $listenv) {
+	$dictenv.Add($itemenv.name,$itemenv.value)
+}
+$dictenv
+###
+
+### GET KB INFO ###
+$arrayhotfixes = @()
+$arrayhotfixes = Get-HotFix | Select-Object -Property HotFixId | %{$_.HotFixId}
+###
 
 Set-Attr $result.ansible_facts "ansible_interfaces" $formattednetcfg
 
@@ -72,7 +162,21 @@ Set-Attr $date "minute" (Get-Date -format mm)
 Set-Attr $date "iso8601" (Get-Date -format s)
 Set-Attr $result.ansible_facts "ansible_date_time" $date
 
+### ADD TO ANSIBLE_FACTS INFO ABOUT CPU AND VIRTUALIZATION INFO ###
+if ($virtualization_type){
+        Set-Attr $result.ansible_facts "ansible_virtualization_type" $virtualization_type
+}
+Set-Attr $result.ansible_facts "ansible_processor_cores" $processor_cores
+Set-Attr $result.ansible_facts "ansible_processor_count" $processor_count
+Set-Attr $result.ansible_facts "ansible_processor" $processor_info
+###
+
 Set-Attr $result.ansible_facts "ansible_totalmem" $capacity
+
+### ADD TO ANSIBLE_FACTS INFO ABOUT DISK ###
+Set-Attr $result.ansible_facts "ansible_devices" $arraydevices
+Set-Attr $result.ansible_facts "ansible_mounts" $arraymounts
+###
 
 Set-Attr $result.ansible_facts "ansible_lastboot" $win32_os.lastbootuptime.ToString("u")
 Set-Attr $result.ansible_facts "ansible_uptime_seconds" $([System.Convert]::ToInt64($(Get-Date).Subtract($win32_os.lastbootuptime).TotalSeconds))
@@ -80,6 +184,14 @@ Set-Attr $result.ansible_facts "ansible_uptime_seconds" $([System.Convert]::ToIn
 $ips = @()
 Foreach ($ip in $netcfg.IPAddress) { If ($ip) { $ips += $ip } }
 Set-Attr $result.ansible_facts "ansible_ip_addresses" $ips
+
+### ADD TO ANSIBLE_FACTS INFO ABOUT ENVIROMENT VARIABLES ###
+Set-Attr $result.ansible_facts "ansible_env" $dictenv
+###
+
+### ADD TO ANSIBLE_FACTS INFO ABOUT INSTALLED KBS ###
+Set-Attr $result.ansible_facts "ansible_kbs" $arrayhotfixes 
+###
 
 $psversion = $PSVersionTable.PSVersion.Major
 Set-Attr $result.ansible_facts "ansible_powershell_version" $psversion
